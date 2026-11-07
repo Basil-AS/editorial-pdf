@@ -1,284 +1,238 @@
 #!/usr/bin/env python3
-"""
-build_pdf.py - Publication-ready Editorial PDF Generator from Markdown
-
-Features:
-- Converts Markdown to print-ready HTML using markdown-it-py
-- Transforms GitHub-style callouts (> [!NOTE], > [!TIP], etc.) into styled alert cards
-- Inlines vector SVG diagrams directly from .svg or .html files (eliminating rasterization and external file dependencies)
-- Shifts document headings so Chapters become top-level bookmarks in PDF readers
-- Renders via headless Edge / Chromium (Playwright) with A4 paged media styles, margins, headers, and footers
-- Sanitizes link annotations via pypdf: converts absolute file:/// paths into relative ./ links
-- Preserves full hierarchical PDF bookmarks (outline) using writer.append(reader)
-"""
-
-import os
-import sys
-import re
+"""Render Markdown to a tagged PDF with local assets and stable navigation."""
 import argparse
-from pathlib import Path
+import base64
+from html import escape
+import os
+from pathlib import Path, PurePosixPath
+import re
+from tempfile import TemporaryDirectory
+from urllib.parse import quote, unquote, urlsplit
+
 from bs4 import BeautifulSoup
 from markdown_it import MarkdownIt
+from playwright.sync_api import sync_playwright
+from pypdf import PdfReader, PdfWriter
+from pypdf.generic import NameObject, TextStringObject
 
-# Ensure UTF-8 output on Windows consoles
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
-
-ALERT_CONFIG = {
-    "NOTE": ("#0969da", "#f0f8ff", "ℹ️ ПРИМЕЧАНИЕ"),
-    "TIP": ("#1a7f37", "#f0fff4", "💡 СОВЕТ"),
-    "IMPORTANT": ("#8250df", "#faf5ff", "⚡ ВАЖНО"),
-    "WARNING": ("#9a6700", "#fffdf0", "⚠️ ВНИМАНИЕ"),
-    "CAUTION": ("#cf222e", "#fff5f5", "🛑 ОСТОРОЖНО"),
+ORIGIN = "https://editorial.invalid"
+DOCUMENT = ORIGIN + "/document"
+CSS = Path(__file__).resolve().parents[1] / "assets/editorial.css"
+MEDIA = {
+    ".svg": "image/svg+xml", ".png": "image/png", ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg", ".webp": "image/webp", ".gif": "image/gif",
+}
+LABELS = {
+    "NOTE": ("Note", "Примечание"), "TIP": ("Tip", "Совет"),
+    "IMPORTANT": ("Important", "Важно"), "WARNING": ("Warning", "Внимание"),
+    "CAUTION": ("Caution", "Осторожно"),
 }
 
-def parse_alerts(raw_md: str) -> str:
-    def replace_alert(match):
-        atype = match.group(1).upper()
-        content = match.group(2).strip()
-        color, bg, default_title = ALERT_CONFIG.get(atype, ("#0969da", "#f0f8ff", atype))
 
-        lines = []
-        for line in content.split("\n"):
-            clean = re.sub(r"^>\s?", "", line).strip()
-            if not clean:
-                continue
-            clean = re.sub(r"\*\*(.*?)\*\*", r"<strong>\1</strong>", clean)
-            clean = re.sub(r"`(.*?)`", r"<code>\1</code>", clean)
-            lines.append(clean)
+def local_path(raw):
+    path = unquote(raw)
+    if not path or path.startswith("/") or any(c in path for c in "\\:\x00"):
+        raise ValueError(f"Expected a relative path: {raw}")
+    if ".." in PurePosixPath(path).parts:
+        raise ValueError(f"Parent traversal is disallowed: {raw}")
+    return path
 
-        body_html = "<br>".join(lines)
-        return (
-            f'<div class="callout callout-{atype.lower()}" style="border-left: 4px solid {color}; background-color: {bg}; padding: 10px 14px; margin: 12px 0; border-radius: 5px; page-break-inside: avoid; break-inside: avoid;">'
-            f'<div class="callout-header" style="color: {color}; font-size: 9.5px; font-weight: 700; font-family: \'Geist Mono\', monospace; letter-spacing: 0.08em; margin-bottom: 4px;">{default_title}</div>'
-            f'<div class="callout-body" style="font-size: 11px; line-height: 1.5; color: #2d3142;">{body_html}</div>'
-            f'</div>\n\n'
-        )
 
-    return re.sub(r">\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*\n((?:>.*(?:\n|$))*)", replace_alert, raw_md, flags=re.IGNORECASE)
-
-def find_diagram_content(filename: str, diagrams_dir: Path) -> str | None:
-    target_name = Path(filename).name
-    candidates = [
-        diagrams_dir / target_name,
-        diagrams_dir / f"{target_name}.svg",
-        diagrams_dir / f"{Path(target_name).stem}.svg",
-        diagrams_dir / f"{Path(target_name).stem}.html",
-    ]
-    for p in candidates:
-        if p.exists():
-            if p.suffix.lower() == ".svg":
-                try:
-                    return p.read_text(encoding="utf-8")
-                except Exception:
-                    pass
-            elif p.suffix.lower() == ".html":
-                try:
-                    soup = BeautifulSoup(p.read_text(encoding="utf-8"), "html.parser")
-                    svg = soup.find("svg")
-                    if svg:
-                        return str(svg)
-                except Exception:
-                    pass
-    return None
-
-def inject_inline_diagrams(html: str, diagrams_dir: Path) -> str:
-    # Match markdown images or html img tags
-    img_pattern = re.compile(r'<p>\s*<img[^>]+src=[\"\']([^\"\']+)[\"\'][^>]*alt=[\"\']([^\"\']*)[\"\'][^>]*>\s*</p>', re.IGNORECASE)
-    img_pattern2 = re.compile(r'<p>\s*<img[^>]+src=[\"\']([^\"\']+)[\"\'][^>]*>\s*</p>', re.IGNORECASE)
-
-    def replacer(match):
-        src = match.group(1)
-        alt = match.group(2) if len(match.groups()) > 1 else ""
-        title = alt or Path(src).stem.replace("_", " ").upper()
-
-        svg_content = find_diagram_content(src, diagrams_dir)
-        if svg_content:
-            return (
-                f'<div class="editorial-diagram" style="page-break-inside: avoid; break-inside: avoid; margin: 16px 0; background: #ffffff; border: 1px solid rgba(45,49,66,0.14); border-radius: 6px; padding: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.03);">'
-                f'<div class="diagram-title" style="font-family: \'Geist Mono\', monospace; font-size: 8.5px; font-weight: 600; color: #4f5d75; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 8px;">{title}</div>'
-                f'<div style="width: 100%;">{svg_content}</div>'
-                f'</div>'
-            )
-        return match.group(0)
-
-    html = img_pattern.sub(replacer, html)
-    html = img_pattern2.sub(replacer, html)
-    return html
-
-def shift_headings(html: str) -> str:
-    """Promotes h2->h1, h3->h2, h4->h3 in a single pass so chapters become top-level bookmarks."""
-    # Convert first H1 into a title banner
-    html = re.sub(r'<h1>(.*?)</h1>', r'<div class="doc-main-title">\1</div>', html, count=1)
-
-    def shift_match(match):
-        tag = match.group(1).lower()
-        attrs = match.group(2)
-        content = match.group(3)
-        target_tag = {"h2": "h1", "h3": "h2", "h4": "h3"}.get(tag, tag)
-        return f"<{target_tag}{attrs}>{content}</{target_tag}>"
-
-    return re.sub(r'<(h[2-4])([^>]*)>(.*?)</\1>', shift_match, html, flags=re.DOTALL)
-
-def build_pdf(
-    input_path: Path,
-    output_path: Path,
-    css_path: Path | None = None,
-    diagrams_dir: Path | None = None,
-    channel: str = "",
-    doc_header: str | None = None,
-    shift_heading_levels: bool = True,
-    sanitize_links: bool = True,
-    keep_temp: bool = False,
-):
-    from playwright.sync_api import sync_playwright
-    import pypdf
-
-    if not input_path.exists():
-        raise FileNotFoundError(f"Input file not found: {input_path}")
-
-    input_dir = input_path.parent
-    if diagrams_dir is None:
-        diagrams_dir = input_dir
-
-    raw_md = input_path.read_text(encoding="utf-8")
-
-    # Extract title from first H1 if available
-    h1_match = re.search(r"^#\s+(.+)$", raw_md, re.MULTILINE)
-    default_title = h1_match.group(1).strip() if h1_match else input_path.stem.replace("_", " ")
-    header_text = doc_header or default_title
-
-    # 1. Parse GitHub-style alerts
-    raw_md = parse_alerts(raw_md)
-
-    # 2. Render Markdown
-    md_parser = MarkdownIt("default", {"html": True}).enable("table")
-    rendered_html = md_parser.render(raw_md)
-
-    # 3. Inject Vector SVGs
-    rendered_html = inject_inline_diagrams(rendered_html, diagrams_dir)
-
-    # 4. Heading Promotion for PDF Bookmarks
-    if shift_heading_levels:
-        rendered_html = shift_headings(rendered_html)
-
-    # 5. Load CSS
-    css_content = ""
-    if css_path and css_path.exists():
-        css_content = css_path.read_text(encoding="utf-8")
+def read_image(src, roots):
+    url = urlsplit(src)
+    if url.scheme or url.netloc or url.query or url.fragment:
+        raise ValueError(f"Use a local image file: {src}")
+    relative = local_path(url.path)
+    for root in roots:
+        asset = (root / relative).resolve()
+        if not asset.is_relative_to(root):
+            raise ValueError(f"Image resolves outside its asset directory: {src}")
+        if asset.is_file():
+            break
     else:
-        # Default skill CSS path
-        default_skill_css = Path(__file__).parent.parent / "assets" / "editorial.css"
-        if default_skill_css.exists():
-            css_content = default_skill_css.read_text(encoding="utf-8")
+        raise ValueError(f"Missing image: {src}")
+    mime = MEDIA.get(asset.suffix.lower())
+    if asset.suffix.lower() == ".html":
+        html = BeautifulSoup(asset.read_text(encoding="utf-8"), "html.parser")
+        svgs = html.find_all("svg")
+        if len(svgs) != 1:
+            raise ValueError(f"Export a static SVG from {src}; expected exactly one SVG")
+        data = str(svgs[0]).encode()
+        mime = MEDIA[".svg"]
+    elif mime:
+        data = asset.read_bytes()
+    else:
+        raise ValueError(f"Unsupported image format: {src}")
+    return f"data:{mime};base64," + base64.b64encode(data).decode("ascii")
 
-    full_html = f"""<!DOCTYPE html>
-<html lang="ru">
-<head>
-<meta charset="UTF-8">
-<title>{default_title}</title>
-<style>
-{css_content}
-</style>
-</head>
-<body>
-{rendered_html}
-</body>
-</html>"""
 
-    temp_html_path = output_path.parent / f"_temp_render_{output_path.stem}.html"
-    temp_html_path.write_text(full_html, encoding="utf-8")
+def prepare_document(args):
+    md = MarkdownIt("commonmark", {"html": False}).enable("table")
+    soup = BeautifulSoup(md.render(args.input.read_text(encoding="utf-8-sig")), "html.parser")
+    headings = soup.find_all(re.compile(r"^h[1-6]$"))
+    first_h1 = next((h for h in headings if h.name == "h1"), None)
+    title = args.title or (first_h1.get_text(" ", strip=True) if first_h1 else args.input.stem)
+    ru = args.lang.lower().split("-")[0] == "ru"
 
-    try:
-        print(f"[1/3] Rendering PDF with Playwright ({channel})...")
-        with sync_playwright() as p:
-            launch_kwargs = {"headless": True}
-            if channel:
-                try:
-                    browser = p.chromium.launch(channel=channel, **launch_kwargs)
-                except Exception as e:
-                    print(f"Warning: Channel '{channel}' failed ({e}), falling back to bundled Chromium...")
-                    browser = p.chromium.launch(**launch_kwargs)
-            else:
-                browser = p.chromium.launch(**launch_kwargs)
+    ids = set()
+    for heading in headings:
+        slug = re.sub(r"[^\w-]", "", heading.get_text().strip().lower().replace(" ", "-"))
+        base = slug or "section"
+        candidate = base
+        number = 1
+        while candidate in ids:
+            number += 1
+            candidate = f"{base}-{number}"
+        ids.add(candidate)
+        heading["id"] = candidate
+    if first_h1:
+        first_h1["class"] = "document-title"
 
-            page = browser.new_page()
-            page.goto(temp_html_path.resolve().as_uri(), wait_until="load")
+    for block in soup.find_all("blockquote"):
+        paragraph = block.find("p", recursive=False)
+        if paragraph is None or not paragraph.contents:
+            continue
+        node = paragraph.contents[0]
+        match = re.match(r"^\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\](?:\n|$)", str(node))
+        if not match or node.name is not None:
+            continue
+        kind = match[1]
+        node.replace_with(str(node)[match.end():])
+        if not paragraph.get_text(strip=True) and not paragraph.find():
+            paragraph.decompose()
+        block.name = "aside"
+        block["class"] = ["callout", f"callout-{kind.lower()}"]
+        label = soup.new_tag("div", attrs={"class": "callout-label"})
+        label.string = LABELS[kind][ru]
+        block.insert(0, label)
 
+    roots = [args.input.resolve().parent]
+    if args.diagrams_dir:
+        roots.append(args.diagrams_dir.resolve(strict=True))
+    for img in soup.find_all("img"):
+        img["src"] = read_image(img["src"], roots)
+
+    companions = {}
+    for link in soup.find_all("a", href=True):
+        href = link["href"]
+        url = urlsplit(href)
+        if href.startswith("#") and unquote(url.fragment) in ids:
+            continue
+        if url.scheme in {"http", "https"} and url.hostname and not url.username and not url.password:
+            continue
+        if url.scheme == "mailto" and url.path:
+            continue
+        if args.companion_root and not url.scheme and not url.netloc and not href.startswith("#"):
+            path = local_path(url.path)
+            target = (args.companion_root / path).resolve()
+            if target.is_relative_to(args.companion_root) and target.is_file():
+                key = ORIGIN + f"/companion/{len(companions)}"
+                companions[key] = "./" + quote(path, safe="/") + url.geturl()[len(url.path):]
+                link["href"] = key
+                continue
+        raise ValueError(f"Unresolved or unsupported link: {href}")
+    return title, str(soup), companions
+
+
+def rewrite_companions(source, output, companions):
+    with source.open("rb") as stream:
+        writer = PdfWriter(clone_from=PdfReader(stream))
+        for page in writer.pages:
+            for ref in page.get("/Annots", []):
+                action = ref.get_object().get("/A")
+                if action is not None:
+                    action = action.get_object()
+                    target = companions.get(str(action.get("/URI", "")))
+                    if target:
+                        action[NameObject("/URI")] = TextStringObject(target)
+        with output.open("wb") as result:
+            writer.write(result)
+
+
+def build(args):
+    title, body, companions = prepare_document(args)
+    css = (args.css or CSS).read_text(encoding="utf-8")
+    if re.search(r"</style", css, flags=re.IGNORECASE):
+        raise ValueError("CSS must be a stylesheet without HTML tags")
+    html = (
+        f'<!doctype html><html lang="{escape(args.lang)}"><meta charset="utf-8">'
+        f"<title>{escape(title)}</title><style>{css}</style><body><main>{body}</main>"
+        "</body></html>"
+    )
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    with TemporaryDirectory(prefix=".editorial-", dir=args.output.parent) as temp:
+        draft = Path(temp) / "draft.pdf"
+        with sync_playwright() as playwright:
+            options = {"channel": args.channel} if args.channel else {}
+            if args.browser_executable:
+                options["executable_path"] = str(args.browser_executable.resolve(strict=True))
+            browser = playwright.chromium.launch(**options)
+            page = browser.new_page(java_script_enabled=False, service_workers="block")
+            blocked = []
+
+            def route_request(route):
+                if route.request.url == DOCUMENT and route.request.is_navigation_request():
+                    route.fulfill(content_type="text/html; charset=utf-8", body=html)
+                else:
+                    blocked.append(route.request.resource_type)
+                    route.abort()
+
+            page.route("**/*", route_request)
+            page.goto(DOCUMENT, wait_until="load")
+            broken = page.locator("img").evaluate_all(
+                "(images) => images.filter(img => !img.complete || !img.naturalWidth).length"
+            )
+            page.evaluate("document.fonts.ready.then(() => true)")
+            if blocked or broken:
+                raise ValueError(f"Blocked resource types: {blocked}; broken images: {broken}")
+            footer = 'Страница <span class="pageNumber"></span> из' if args.lang.startswith("ru") else 'Page <span class="pageNumber"></span> of'
+            header = escape(args.header if args.header is not None else title)
             page.pdf(
-                path=str(output_path),
-                format="A4",
-                print_background=True,
-                margin={"top": "14mm", "bottom": "14mm", "left": "10mm", "right": "10mm"},
+                path=draft, format=args.paper, print_background=True, tagged=True, outline=True,
                 display_header_footer=True,
-                header_template=f'<div style="font-size: 7.5pt; color: #7a8399; width: 100%; text-align: right; padding-right: 10mm; font-family: Segoe UI, sans-serif;">{header_text}</div>',
-                footer_template='<div style="font-size: 7.5pt; color: #7a8399; width: 100%; text-align: center; font-family: Segoe UI, sans-serif;">Страница <span class="pageNumber"></span> из <span class="totalPages"></span></div>',
-                outline=True,
-                tagged=True
+                margin={"top": "21mm", "bottom": "19mm", "left": "19mm", "right": "19mm"},
+                header_template=f'<div style="margin:0 19mm;font:8pt sans-serif;color:#475569;width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis">{header}</div>',
+                footer_template=f'<div style="font:8pt sans-serif;color:#475569;width:100%;text-align:center">{footer} <span class="totalPages"></span></div>',
             )
             browser.close()
+        if companions:
+            final = Path(temp) / "final.pdf"
+            rewrite_companions(draft, final, companions)
+        else:
+            final = draft
+        os.replace(final, args.output)
 
-        # 6. Post-processing with pypdf
-        if sanitize_links:
-            print("[2/3] Sanitizing link annotations & preserving outline...")
-            reader = pypdf.PdfReader(str(output_path))
-            writer = pypdf.PdfWriter(clone_from=reader)
-
-            rewritten_count = 0
-            for p_obj in writer.pages:
-                if '/Annots' in p_obj:
-                    for annot in p_obj['/Annots']:
-                        obj = annot.get_object()
-                        if '/A' in obj and '/URI' in obj['/A']:
-                            uri = str(obj['/A']['/URI'])
-                            if 'file://' in uri:
-                                filename = uri.split('/')[-1]
-                                obj['/A'][pypdf.generic.NameObject('/URI')] = pypdf.generic.create_string_object(f"./{filename}")
-                                rewritten_count += 1
-
-            temp_sanitized = output_path.parent / f"_temp_sanitized_{output_path.name}"
-            with open(temp_sanitized, "wb") as f_out:
-                writer.write(f_out)
-
-            os.replace(temp_sanitized, output_path)
-            print(f"Sanitized {rewritten_count} link annotations to relative paths.")
-
-        print(f"[3/3] PDF generated successfully: {output_path} ({os.path.getsize(output_path)} bytes)")
-
-    finally:
-        if not keep_temp and temp_html_path.exists():
-            temp_html_path.unlink()
 
 def main():
-    parser = argparse.ArgumentParser(description="Editorial PDF Builder: Turn Markdown into publication-ready PDFs")
-    parser.add_argument("input", type=Path, help="Input Markdown (.md) file")
-    parser.add_argument("-o", "--output", type=Path, default=None, help="Output PDF file path")
-    parser.add_argument("--css", type=Path, default=None, help="Path to custom CSS stylesheet")
-    parser.add_argument("--diagrams-dir", type=Path, default=None, help="Directory containing SVG/HTML diagrams")
-    parser.add_argument("--channel", type=str, default="", help="Browser channel ('msedge' or 'chromium')")
-    parser.add_argument("--header", type=str, default=None, help="Document header running title")
-    parser.add_argument("--no-heading-shift", action="store_true", help="Do not shift h2..h4 headings")
-    parser.add_argument("--no-link-sanitize", action="store_true", help="Do not rewrite file:// links to relative")
-    parser.add_argument("--keep-temp", action="store_true", help="Keep intermediate HTML file")
-
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("input", type=Path)
+    parser.add_argument("-o", "--output", type=Path)
+    parser.add_argument("--css", type=Path, help="Replace the bundled stylesheet")
+    parser.add_argument("--diagrams-dir", type=Path, help="Additional local image root")
+    parser.add_argument("--companion-root", type=Path, help="Directory to ship alongside the PDF")
+    browser = parser.add_mutually_exclusive_group()
+    browser.add_argument("--channel", help="Installed Playwright browser channel, e.g. msedge")
+    browser.add_argument("--browser-executable", type=Path)
+    parser.add_argument("--title", help="Override metadata title")
+    parser.add_argument("--header", help="Override running title; pass empty to suppress")
+    parser.add_argument("--lang", default="en", help="Document language tag, e.g. ru")
+    parser.add_argument("--paper", choices=["A4", "Letter"], default="A4")
     args = parser.parse_args()
-    output_path = args.output or args.input.with_suffix(".pdf")
+    args.output = args.output or args.input.with_suffix(".pdf")
+    if args.output.suffix.lower() != ".pdf" or args.output.resolve() == args.input.resolve():
+        parser.error("Choose a .pdf output distinct from the input")
+    if not re.fullmatch(r"[A-Za-z]{2,8}(?:-[A-Za-z0-9]{1,8})*", args.lang):
+        parser.error("--lang must be a language tag")
+    if args.companion_root:
+        args.companion_root = args.companion_root.resolve()
+        if args.companion_root != args.output.resolve().parent:
+            parser.error("--companion-root must be the PDF output directory")
+    try:
+        build(args)
+    except Exception as error:
+        parser.exit(1, f"Build failed: {error}\n")
+    print(args.output)
 
-    build_pdf(
-        input_path=args.input,
-        output_path=output_path,
-        css_path=args.css,
-        diagrams_dir=args.diagrams_dir,
-        channel=args.channel,
-        doc_header=args.header,
-        shift_heading_levels=not args.no_heading_shift,
-        sanitize_links=not args.no_link_sanitize,
-        keep_temp=args.keep_temp,
-    )
 
 if __name__ == "__main__":
     main()

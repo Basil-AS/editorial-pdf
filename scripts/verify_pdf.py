@@ -1,132 +1,131 @@
 #!/usr/bin/env python3
-"""
-verify_pdf.py - Automated Quality and Leak Audit for Editorial PDFs
-
-Audits:
-1. Page count and general metadata
-2. PDF Bookmarks (Outlines) hierarchy and chapter count
-3. Link annotations: strictly verifies that all links are relative and contain NO absolute file:/// or local drive paths
-4. Text layer leak detection: audits for developer usernames, local host paths, internal IPs, etc.
-"""
-
-import sys
-import re
+"""Check editorial PDF structure, destinations and selected disclosure indicators."""
 import argparse
+import ipaddress
 from pathlib import Path
-import pypdf
+import re
+from urllib.parse import unquote, urlsplit
 
-# Ensure UTF-8 output on Windows consoles
-if sys.platform == "win32":
-    try:
-        sys.stdout.reconfigure(encoding="utf-8")
-        sys.stderr.reconfigure(encoding="utf-8")
-    except Exception:
-        pass
+from pypdf import PdfReader
+from pypdf.generic import ArrayObject, NameObject
 
-def print_outline(outline, level=0):
+LOCAL = re.compile(r"file:/{1,3}|[A-Za-z]:[\\/](?:Users|Documents and Settings)[\\/]|/(?:home|Users|workspace)/[^/\s]+", re.I)
+IPV4 = re.compile(r"(?<![\w.])(?:\d{1,3}\.){3}\d{1,3}(?![\w.])")
+PRIVATE = tuple(map(ipaddress.ip_network, ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "127.0.0.0/8", "169.254.0.0/16"]))
+
+
+def check_outline(reader, entries):
     count = 0
-    for item in outline:
-        if isinstance(item, list):
-            count += print_outline(item, level + 1)
+    for entry in entries:
+        if isinstance(entry, list):
+            count += check_outline(reader, entry)
         else:
-            title = getattr(item, "title", str(item))
-            page_dest = getattr(item, "page", None)
-            indent = "  " * level
-            print(f"{indent}• {title}")
+            if not 0 <= reader.get_destination_page_number(entry) < len(reader.pages):
+                raise ValueError("Bookmark points outside the document")
             count += 1
     return count
 
-def verify_pdf(pdf_path: Path, forbidden_words: list[str] | None = None) -> bool:
-    if not pdf_path.exists():
-        print(f"❌ Error: File not found: {pdf_path}")
-        return False
 
-    print(f"\n==================================================")
-    print(f" AUDITING PDF: {pdf_path.name}")
-    print(f"==================================================")
-
-    reader = pypdf.PdfReader(str(pdf_path))
-    num_pages = len(reader.pages)
-    print(f"✔ Page Count: {num_pages} pages")
-
-    # 1. Audit Bookmarks (Outline)
-    print(f"\n--- 1. BOOKMARKS / OUTLINES HIERARCHY ---")
+def valid_uri(uri):
     try:
-        outline = reader.outline
-        if outline:
-            total_bookmarks = print_outline(outline)
-            print(f"✔ Hierarchical Bookmarks present ({total_bookmarks} entries).")
-        else:
-            print("⚠️ Warning: No document outline/bookmarks found!")
-    except Exception as e:
-        print(f"⚠️ Could not parse outline: {e}")
-
-    # 2. Audit Link Annotations
-    print(f"\n--- 2. LINK ANNOTATIONS AUDIT ---")
-    all_links = []
-    abs_links = []
-
-    for page_idx, page in enumerate(reader.pages):
-        if '/Annots' in page:
-            for annot in page['/Annots']:
-                obj = annot.get_object()
-                if '/A' in obj and '/URI' in obj['/A']:
-                    uri = str(obj['/A']['/URI'])
-                    all_links.append((page_idx + 1, uri))
-                    if 'file://' in uri or 'C:' in uri or 'Users/' in uri or 'Users\\' in uri:
-                        abs_links.append((page_idx + 1, uri))
-
-    print(f"Total Link Annotations: {len(all_links)}")
-    if abs_links:
-        print(f"❌ FAILED: Found {len(abs_links)} absolute / forbidden links:")
-        for page_num, uri in abs_links:
-            print(f"   [Page {page_num}] {uri}")
+        url = urlsplit(uri)
+        if url.scheme in {"https", "http"}:
+            return bool(url.hostname and not url.username and not url.password and url.hostname != "editorial.invalid")
+        if url.scheme == "mailto":
+            return bool(url.path)
+        path = unquote(url.path)
+        return (
+            uri.startswith("./") and not url.scheme and not url.netloc
+            and not any(c in path for c in "\\:\x00") and ".." not in path.split("/")
+            and bool(path[2:].strip("/"))
+        )
+    except ValueError:
         return False
-    else:
-        print("✔ No matching local-file URI patterns found.")
-        for page_num, uri in all_links[:5]:
-            print(f"   Sample [P{page_num}]: {uri}")
 
-    # 3. Audit Text Layer for Leaks
-    print(f"\n--- 3. TEXT LAYER LEAK DETECTION ---")
-    full_text = ""
-    for page in reader.pages:
-        full_text += page.extract_text() or ""
 
-    default_forbidden = ["Users\\\\", ":/Users/", ":\\Users\\", "file://", "192.168.", "10.0.", "172.16."]
-    check_list = set(default_forbidden + (forbidden_words or []))
+def audit(args):
+    reader = PdfReader(args.pdf)
+    if reader.is_encrypted or not reader.pages:
+        raise ValueError("Expected an unencrypted PDF with at least one page")
+    bookmarks = check_outline(reader, reader.outline)
+    errors = []
+    if args.require_outline and not bookmarks:
+        errors.append("Expected bookmarks")
+    if args.require_tagged and not reader.root_object.get("/StructTreeRoot"):
+        errors.append("Expected a structure tree")
+    forbidden = [word.strip().casefold() for word in args.forbidden.split(",") if word.strip()]
+    links = 0
+    named_destinations = reader.named_destinations
+    page_refs = {page.indirect_reference for page in reader.pages}
 
-    found_leaks = []
-    for word in check_list:
-        if not word:
-            continue
-        matches = re.findall(re.escape(word), full_text, re.IGNORECASE)
-        if matches:
-            found_leaks.append((word, len(matches)))
-
-    if found_leaks:
-        print(f"❌ LEAKS DETECTED in text layer:")
-        for word, count in found_leaks:
-            print(f"   - '{word}': {count} occurrences")
+    def valid_destination(destination):
+        if isinstance(destination, str):
+            key = str(destination)
+            if isinstance(destination, NameObject):
+                key = key if key in named_destinations else key.removeprefix("/")
+            named = named_destinations.get(key)
+            return named is not None and 0 <= reader.get_destination_page_number(named) < len(reader.pages)
+        if isinstance(destination, ArrayObject) and destination:
+            return list.__getitem__(destination, 0) in page_refs
         return False
-    else:
-        print(f"✔ TEXT LAYER CLEAN (Audited {len(check_list)} patterns, {len(full_text)} characters, 0 leaks).")
 
-    print(f"\n==================================================")
-    print(f"✔ AUDIT RESULT: PASSED ALL CHECKS")
-    print(f"==================================================\n")
-    return True
+    def check_content(label, text):
+        if any(term in text.casefold() for term in forbidden):
+            errors.append(f"{label}: forbidden literal")
+        if args.public and LOCAL.search(text):
+            errors.append(f"{label}: local path pattern")
+        if args.public:
+            for value in IPV4.findall(text):
+                try:
+                    address = ipaddress.ip_address(value)
+                except ValueError:
+                    continue
+                if any(address in network for network in PRIVATE):
+                    errors.append(f"{label}: private or local IPv4")
+                    break
+
+    check_content("Metadata", str(reader.metadata))
+    for index, page in enumerate(reader.pages, start=1):
+        text = page.extract_text() or ""
+        if args.require_text and not text.strip():
+            errors.append(f"Page {index}: no extractable text")
+        check_content(f"Page {index}", text)
+        for ref in page.get("/Annots", []):
+            annot = ref.get_object()
+            if annot.get("/Subtype") != "/Link":
+                continue
+            links += 1
+            action = annot.get("/A")
+            if action is None and valid_destination(annot.get("/Dest")):
+                continue
+            if action is not None:
+                action = action.get_object()
+                if action.get("/S") == "/GoTo" and valid_destination(action.get("/D")):
+                    continue
+                if action.get("/S") == "/URI" and valid_uri(str(action.get("/URI", ""))):
+                    check_content(f"Page {index} link", unquote(str(action["/URI"])))
+                    continue
+            errors.append(f"Page {index}: unsupported link or action")
+    print(f"{len(reader.pages)} pages, {bookmarks} bookmarks, {links} links")
+    for error in errors:
+        print(error)
+    return not errors
+
 
 def main():
-    parser = argparse.ArgumentParser(description="Audit editorial PDF for outlines, links, and leaks")
-    parser.add_argument("pdf_path", type=Path, help="Path to PDF file to verify")
-    parser.add_argument("--forbidden", type=str, default="", help="Comma-separated forbidden words/usernames to check")
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("pdf", type=Path)
+    parser.add_argument("--require-outline", action="store_true")
+    parser.add_argument("--require-tagged", action="store_true")
+    parser.add_argument("--require-text", action="store_true")
+    parser.add_argument("--public", action="store_true", help="Flag selected local paths and private IPv4 addresses")
+    parser.add_argument("--forbidden", default="", help="Comma-separated case-insensitive literals")
+    try:
+        passed = audit(parser.parse_args())
+    except Exception as error:
+        parser.exit(1, f"Audit failed: {error}\n")
+    raise SystemExit(0 if passed else 1)
 
-    args = parser.parse_args()
-    forbidden = [w.strip() for w in args.forbidden.split(",") if w.strip()]
-
-    passed = verify_pdf(args.pdf_path, forbidden)
-    sys.exit(0 if passed else 1)
 
 if __name__ == "__main__":
     main()
