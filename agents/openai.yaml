@@ -1,0 +1,13 @@
+interface:
+  display_name: Editorial PDF
+  short_description: Build and verify polished editorial PDFs
+  default_prompt: Use $editorial-pdf to create and verify a polished PDF.
+  icon_small: assets/icon.svg
+  icon_large: assets/icon.svg
+policy:
+  products:
+  - chatgpt
+  - codex
+  - api
+  - atlas
+  allow_implicit_invocation: true
