@@ -13,7 +13,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,21 +21,12 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -r requirements.txt
-      - run: pip install -r variants/gost-rf-pdf/requirements.txt
       - run: python -m playwright install --with-deps chromium
-      - name: Install GOST PDF toolchain
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pandoc poppler-utils texlive-xetex texlive-latex-extra texlive-lang-cyrillic fonts-liberation2
       - run: python -m compileall -q scripts tests variants/gost-rf-pdf/scripts
       - run: python scripts/sync_codex_marketplace.py --check
       - run: python tests/check_marketplace.py
       - run: python variants/gost-rf-pdf/scripts/norms.py verify-sources
       - run: python tests/check_norms.py
-      - run: |
-          mkdir -p output
-          python variants/gost-rf-pdf/scripts/build_pdf.py tests/gost-draft.md -o output/gost-draft.pdf --draft --font "Liberation Serif"
-          python variants/gost-rf-pdf/scripts/verify_pdf.py output/gost-draft.pdf
       - run: python tests/check_build.py
       - run: |
           mkdir -p output
@@ -45,6 +36,25 @@ jobs:
         with:
           name: example-pdf
           path: output/example.pdf
+  gost-build:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r variants/gost-rf-pdf/requirements.txt
+      - name: Install GOST PDF toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends pandoc poppler-utils texlive-xetex texlive-latex-extra texlive-lang-cyrillic texlive-fonts-recommended fonts-liberation2
+      - run: |
+          mkdir -p output
+          python variants/gost-rf-pdf/scripts/build_pdf.py tests/gost-draft.md -o output/gost-draft.pdf --draft --font "Liberation Serif"
+          python variants/gost-rf-pdf/scripts/verify_pdf.py output/gost-draft.pdf
   release:
     if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
     needs: verify
