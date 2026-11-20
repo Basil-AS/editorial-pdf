@@ -1,0 +1,87 @@
+name: CI and releases
+on:
+  pull_request:
+    branches: [master]
+  push:
+    branches: [master]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: pip install -r requirements.txt
+      - run: python -m playwright install --with-deps chromium
+      - run: python -m compileall -q scripts tests
+      - run: python tests/check_build.py
+      - run: |
+          mkdir -p output
+          python scripts/build_pdf.py examples/report.md -o output/example.pdf
+          python scripts/verify_pdf.py output/example.pdf --require-outline --require-tagged --require-text --public
+      - uses: actions/upload-artifact@v4
+        with:
+          name: example-pdf
+          path: output/example.pdf
+  release:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/master'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Publish versioned skill archives
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for entry in '1.0.0:06ebf916192f639cd6f8038e271bcbb2e6c3c490' '2.0.0:ef9bfdf1ba5c7fb7f686a0814db9db9b009260b3' "2.0.1:$GITHUB_SHA"; do
+            version="${entry%%:*}"
+            target="${entry#*:}"
+            tag="v$version"
+            if gh release view "$tag" >/dev/null 2>&1; then continue; fi
+            paths=(SKILL.md scripts assets)
+            for optional in references agents; do
+              if git cat-file -e "$target:$optional" 2>/dev/null; then paths+=("$optional"); fi
+            done
+            git archive --format=zip --prefix=editorial-pdf/ "$target" "${paths[@]}" > "dist/editorial-pdf-$tag.zip"
+            (cd dist && sha256sum "editorial-pdf-$tag.zip" > "editorial-pdf-$tag.sha256")
+            case "$version" in
+              1.0.0) notes='Cleaned legacy baseline. Personal examples and external font downloads removed. See merged PRs #1 and #2.' ;;
+              2.0.0) notes='Rebuilt Markdown renderer, offline assets, Cyrillic typography, long tables, navigation and structural verification. See merged PRs #3 and #4.' ;;
+              2.0.1) notes='Repository maintenance release. Adds automated Chromium PDF integration checks, example artifacts, release archives, checksums and contribution guidance. The packaged skill matches version 2.0.0.' ;;
+            esac
+            latest=false
+            if [ "$version" = '2.0.1' ]; then latest=true; fi
+            gh release create "$tag" --target "$target" --title "Editorial PDF $tag" --notes "$notes" --latest="$latest" "dist/editorial-pdf-$tag.zip" "dist/editorial-pdf-$tag.sha256"
+          done
+      - name: Remove merged working branches
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          git fetch origin '+refs/heads/*:refs/remotes/origin/*'
+          for branch in develop feature/editorial-pdf-1.0 feature/editorial-pdf-2.0 release/1.0.0 release/2.0.0 chore/finalize-repository; do
+            if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
+              git merge-base --is-ancestor "origin/$branch" HEAD
+              gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$branch"
+            fi
+          done

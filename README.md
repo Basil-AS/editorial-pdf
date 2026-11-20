@@ -1,3 +1,63 @@
 # Editorial PDF
 
-An agent skill for building and verifying print-ready PDFs from Markdown. See [SKILL.md](SKILL.md) for the workflow.
+[![CI](https://github.com/Basil-AS/editorial-pdf/actions/workflows/ci.yml/badge.svg)](https://github.com/Basil-AS/editorial-pdf/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Basil-AS/editorial-pdf)](https://github.com/Basil-AS/editorial-pdf/releases)
+
+Create and verify polished PDF reports from Markdown, with Cyrillic typography, hierarchical bookmarks, embedded diagrams and tables that continue across pages.
+
+## Get started
+
+Download a versioned skill archive from [Releases](https://github.com/Basil-AS/editorial-pdf/releases), or clone this repository. The archive contains the skill instructions, Python scripts, print stylesheet and reference material.
+
+For an AI agent, load [SKILL.md](SKILL.md). For direct command-line use, install Python 3.10 or later and run these commands from the repository root.
+
+```bash
+python -m venv .venv
+# Linux and macOS
+source .venv/bin/activate
+# Windows PowerShell
+# .venv\Scripts\Activate.ps1
+
+python -m pip install -r requirements.txt
+python -m playwright install chromium
+mkdir -p output
+python scripts/build_pdf.py examples/report.md -o output/report.pdf
+python scripts/verify_pdf.py output/report.pdf --require-outline --require-tagged --require-text --public
+```
+
+On Windows, create the output directory with `New-Item -ItemType Directory -Force output`. For Russian labels and page numbering, pass `--lang ru`. Use `--paper Letter` when needed. Install Noto or DejaVu fonts for consistent Cyrillic rendering.
+
+## Capabilities
+
+| Feature | Behavior |
+|---|---|
+| Typography | Local fonts, A4 or Letter, running title and page numbers |
+| Markdown | Headings, pipe tables, lists, code and five GitHub callout types |
+| Images | Embedded SVG, PNG, JPEG, WebP and GIF from local files |
+| Navigation | Heading anchors, hierarchical bookmarks and verified destinations |
+| Long content | Repeated table headers, row-level page breaks and wrapped code |
+| Companions | Optional relative file links retaining directories and fragments |
+| Failed builds | Existing PDF is replaced only after successful rendering |
+| Audit | Optional text, outline, tags and disclosure indicator checks |
+
+See [builder options](references/builder.md) and [existing PDF guidance](references/existing-pdf.md). Render and visually inspect every final page. Structural tags alone do not establish PDF/UA compliance.
+
+## Versions and history
+
+| Version | Scope | Merged changes |
+|---|---|---|
+| 1.0.0 | Cleaned original implementation | [#1](https://github.com/Basil-AS/editorial-pdf/pull/1), [#2](https://github.com/Basil-AS/editorial-pdf/pull/2) |
+| 2.0.0 | Rewritten builder, stylesheet and verifier | [#3](https://github.com/Basil-AS/editorial-pdf/pull/3), [#4](https://github.com/Basil-AS/editorial-pdf/pull/4) |
+| 2.0.1 | CI, release packaging and repository documentation | Repository maintenance |
+
+Release ZIP archives include SHA-256 checksum files. Version 2.0 changes CLI options. Consult `python scripts/build_pdf.py --help` when migrating from 1.0.
+
+## Development and delivery
+
+`master` holds the integrated project. Use a temporary feature or maintenance branch and a pull request into `master`, then merge with a merge commit after CI succeeds. Delete merged branches. The original Gitflow PRs remain available in the history.
+
+CI builds a multi-page Russian report with SVG, a 100-row table and internal links. It verifies navigation, structure, text extraction and preservation of a previous PDF after a failed build. A separate sample PDF is retained as an Actions artifact.
+
+After successful checks on `master`, the release job publishes the versioned archives and checksums. Release targets are recorded explicitly in the workflow. Update the release version and notes when preparing a new release.
+
+Contributions produced with Codex include `Co-authored-by: Codex <codex@openai.com>` in the commit message.
