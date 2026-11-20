@@ -1,0 +1,4 @@
+markdown-it-py>=3,<5
+beautifulsoup4>=4.12,<5
+playwright>=1.42,<2
+pypdf>=6,<7
