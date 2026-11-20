@@ -13,7 +13,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -21,8 +21,19 @@ jobs:
           python-version: '3.12'
           cache: pip
       - run: pip install -r requirements.txt
+      - run: pip install -r variants/gost-rf-pdf/requirements.txt
       - run: python -m playwright install --with-deps chromium
-      - run: python -m compileall -q scripts tests
+      - name: Install GOST PDF toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y pandoc poppler-utils texlive-xetex texlive-latex-extra texlive-lang-cyrillic fonts-liberation2
+      - run: python -m compileall -q scripts tests variants/gost-rf-pdf/scripts
+      - run: python variants/gost-rf-pdf/scripts/norms.py verify-sources
+      - run: python tests/check_norms.py
+      - run: |
+          mkdir -p output
+          python variants/gost-rf-pdf/scripts/build_pdf.py tests/gost-draft.md -o output/gost-draft.pdf --draft --font "Liberation Serif"
+          python variants/gost-rf-pdf/scripts/verify_pdf.py output/gost-draft.pdf
       - run: python tests/check_build.py
       - run: |
           mkdir -p output
@@ -71,6 +82,14 @@ jobs:
             if [ "$version" = '2.0.1' ]; then latest=true; fi
             gh release create "$tag" --target "$target" --title "Editorial PDF $tag" --notes "$notes" --latest="$latest" "dist/editorial-pdf-$tag.zip" "dist/editorial-pdf-$tag.sha256"
           done
+          gost_tag='v2.0.1-gost.1'
+          if ! gh release view "$gost_tag" >/dev/null 2>&1; then
+            mkdir -p dist/gost-package
+            git archive --format=tar "$GITHUB_SHA" variants/gost-rf-pdf | tar -xf - -C dist/gost-package --strip-components=2
+            tar -czf "dist/editorial-pdf-$gost_tag.tar.gz" -C dist/gost-package .
+            (cd dist && sha256sum "editorial-pdf-$gost_tag.tar.gz" > "editorial-pdf-$gost_tag.sha256")
+            gh release create "$gost_tag" --target "$GITHUB_SHA" --title "Editorial PDF $gost_tag" --notes 'Optional GOST companion profile, packaged separately from the default Editorial PDF 2.0.1 skill. Includes the supplied 21-standard source set, review workflow and ГОСТ 7.32 builder. Source editions are preserved as supplied; see the package scope and currency limitations.' --latest=false "dist/editorial-pdf-$gost_tag.tar.gz" "dist/editorial-pdf-$gost_tag.sha256"
+          fi
       - name: Remove merged working branches
         env:
           GH_TOKEN: ${{ github.token }}
@@ -79,7 +98,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin '+refs/heads/*:refs/remotes/origin/*'
-          for branch in develop feature/editorial-pdf-1.0 feature/editorial-pdf-2.0 release/1.0.0 release/2.0.0 chore/finalize-repository; do
+          for branch in develop feature/editorial-pdf-1.0 feature/editorial-pdf-2.0 feature/gost-2.0.1 release/1.0.0 release/2.0.0 chore/finalize-repository; do
             if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
               git merge-base --is-ancestor "origin/$branch" HEAD
               gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$branch"
