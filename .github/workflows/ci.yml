@@ -50,7 +50,7 @@ jobs:
       - name: Install GOST PDF toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends pandoc poppler-utils texlive-xetex texlive-latex-extra texlive-lang-cyrillic fonts-liberation2
+          sudo apt-get install -y --no-install-recommends pandoc poppler-utils texlive-xetex texlive-latex-extra texlive-lang-cyrillic texlive-fonts-recommended fonts-liberation2
       - run: |
           mkdir -p output
           python variants/gost-rf-pdf/scripts/build_pdf.py tests/gost-draft.md -o output/gost-draft.pdf --draft --font "Liberation Serif"
