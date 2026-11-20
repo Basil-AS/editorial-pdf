@@ -49,7 +49,7 @@ def main():
             for rule in norms.checks()["gost-7-1-2003"]
         ],
     })
-    assert any("утратила силу в РФ" in error for error in norms.validate(legacy))
+    assert any("не действует в РФ" in error for error in norms.validate(legacy))
 
     malformed = complete_not_applicable()
     malformed["standards"]["gost-7-1-2003"]["checks"] = [None]
