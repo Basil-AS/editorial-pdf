@@ -51,7 +51,7 @@ See [builder options](references/builder.md) and [existing PDF guidance](referen
 | 2.0.1 | CI, release packaging and repository documentation | Repository maintenance |
 | 2.0.1-gost.1 | Companion profile with the supplied 21-standard GOST set, source PDFs, review guidance and a ГОСТ 7.32 builder | [GOST add-on](variants/gost-rf-pdf/README.md) |
 
-Release ZIP archives include SHA-256 checksum files. Version 2.0 changes CLI options. Consult `python scripts/build_pdf.py --help` when migrating from 1.0.
+Versioned release archives include SHA-256 checksum files. The GOST companion is distributed as a separate tar.gz archive. Version 2.0 changes CLI options. Consult `python scripts/build_pdf.py --help` when migrating from 1.0.
 
 The GOST add-on is a separately versioned profile. It includes the editions supplied in its source package and keeps their text, PDF originals, applicability map, review guides and source-integrity checks together. It does not change the default 2.0.1 profile. Its Markdown builder implements the ГОСТ 7.32 profile; other document families require their own applicable forms and layouts. The included review ledger records applicability and evidence, but its checks do not by themselves certify a document as compliant or confirm that an edition is current.
 

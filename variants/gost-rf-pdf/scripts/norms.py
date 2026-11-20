@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Find supplied standard pages and maintain an explicit coverage record."""
 import argparse
+from datetime import date
 import hashlib
 import json
 from pathlib import Path
@@ -9,6 +10,10 @@ import re
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG = ROOT / "references/catalog.json"
 GUIDES = ROOT / "references/review-guides.md"
+SUPERSEDED_IN_RF = {
+    "gost-7-1-2003", "gost-7-9-95", "gost-7-80-2000",
+    "gost-7-82-2001", "gost-7-12-93",
+}
 
 
 def catalog():
@@ -35,7 +40,11 @@ def pages(item):
 
 def validate(plan, final=False):
     errors = []
+    if not isinstance(plan, dict):
+        return ["Корневая запись должна быть JSON-объектом"]
     entries = plan.get("standards", {})
+    if not isinstance(entries, dict):
+        return ["Поле standards должно быть JSON-объектом"]
     rules = checks()
     expected = {item["id"] for item in catalog()}
     if set(entries) != expected:
@@ -44,9 +53,36 @@ def validate(plan, final=False):
         errors.append("Не указан вид документа")
     for key in sorted(expected):
         item = entries.get(key, {})
+        if not isinstance(item, dict):
+            errors.append(f"{key}: запись источника должна быть JSON-объектом")
+            continue
         decision = item.get("decision")
         if decision not in {"apply", "not_applicable"}:
             errors.append(f"{key}: определите применимость")
+        if decision == "apply":
+            basis = item.get("edition_basis")
+            if basis not in {"current", "contractual"}:
+                errors.append(f"{key}: применяйте только проверенную действующую редакцию "
+                              "или укажите договорно закреплённую")
+            if key in SUPERSEDED_IN_RF and basis == "current":
+                errors.append(f"{key}: редакция не действует в РФ; отметьте not_applicable "
+                              "и добавьте действующую замену как внешний источник либо "
+                              "зафиксируйте договорное основание")
+            try:
+                date.fromisoformat(item.get("edition_checked_on", ""))
+            except (TypeError, ValueError):
+                errors.append(f"{key}: укажите дату проверки статуса YYYY-MM-DD")
+            registry = item.get("edition_registry_url")
+            if not isinstance(registry, str) or not registry.startswith("https://"):
+                errors.append(f"{key}: укажите HTTPS-ссылку на официальный реестр")
+            evidence = item.get("edition_evidence")
+            if not isinstance(evidence, str) or not evidence.strip():
+                errors.append(f"{key}: укажите результат проверки статуса и редакции")
+            elif basis == "contractual" and not re.search(
+                    r"(договор|контракт|ТЗ|спецификац|задани|пункт|раздел)",
+                    evidence, re.I):
+                errors.append(f"{key}: для договорной редакции укажите конкретный пункт "
+                              "договора/ТЗ/задания")
         if not isinstance(item.get("reason"), str) or not item["reason"].strip():
             errors.append(f"{key}: отсутствует обоснование")
         selected = item.get("checks", [])
@@ -55,6 +91,9 @@ def validate(plan, final=False):
             continue
         for index, check in enumerate(selected):
             label = f"{key}/{index+1}"
+            if not isinstance(check, dict):
+                errors.append(f"{label}: запись проверки должна быть JSON-объектом")
+                continue
             if check.get("requirement") != rules[key][index]:
                 errors.append(f"{label}: изменено описание проверки")
             status = check.get("status")
@@ -151,6 +190,8 @@ def main():
         rules = checks()
         output = {"document_kind": args.kind, "standards": {
             s["id"]: {"decision": "pending", "reason": "", "read_pages": [],
+                      "edition_basis": "pending", "edition_checked_on": "",
+                      "edition_registry_url": "", "edition_evidence": "",
                       "checks": [{"requirement": rule, "status": "pending", "evidence": ""}
                                  for rule in rules[s["id"]]]} for s in items}}
         # Refuse overwriting an existing review record.
