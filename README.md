@@ -11,6 +11,23 @@ Download a versioned skill archive from [Releases](https://github.com/Basil-AS/e
 
 For an AI agent, load [SKILL.md](SKILL.md). For direct command-line use, install Python 3.10 or later and run these commands from the repository root.
 
+## Install the Codex marketplace
+
+In Codex, add `git@github.com:Basil-AS/editorial-pdf.git` with Git ref `master` and these two sparse paths, each on its own line:
+
+```text
+.agents/plugins
+plugins/codex
+```
+
+The repository contains a curated `Editorial PDF` plugin with the base PDF and GOST 7.32 skills. The source-of-truth skills remain in the repository root and `variants/gost-rf-pdf`; CI checks that the marketplace copies stay synchronized. The `main` ref does not exist in this repository.
+
+The same source can be added from the Codex CLI:
+
+```bash
+codex plugin marketplace add git@github.com:Basil-AS/editorial-pdf.git --ref master --sparse .agents/plugins --sparse plugins/codex
+```
+
 ```bash
 python -m venv .venv
 # Linux and macOS
@@ -50,8 +67,9 @@ See [builder options](references/builder.md) and [existing PDF guidance](referen
 | 2.0.0 | Rewritten builder, stylesheet and verifier | [#3](https://github.com/Basil-AS/editorial-pdf/pull/3), [#4](https://github.com/Basil-AS/editorial-pdf/pull/4) |
 | 2.0.1 | CI, release packaging and repository documentation | Repository maintenance |
 | 2.0.1-gost.1 | Companion profile with the supplied 21-standard GOST set, source PDFs, review guidance and a ГОСТ 7.32 builder | [GOST add-on](variants/gost-rf-pdf/README.md) |
+| 2.0.1-codex.1 | Codex marketplace catalog with Editorial PDF and GOST skills | [Codex plugin source](plugins/codex) |
 
-Versioned release archives include SHA-256 checksum files. The GOST companion is distributed as a separate tar.gz archive. Version 2.0 changes CLI options. Consult `python scripts/build_pdf.py --help` when migrating from 1.0.
+Versioned release archives include SHA-256 checksum files. The GOST companion and Codex marketplace package are distributed as separate tar.gz archives. Version 2.0 changes CLI options. Consult `python scripts/build_pdf.py --help` when migrating from 1.0.
 
 The GOST add-on is a separately versioned profile. It includes the editions supplied in its source package and keeps their text, PDF originals, applicability map, review guides and source-integrity checks together. It does not change the default 2.0.1 profile. Its Markdown builder implements the ГОСТ 7.32 profile; other document families require their own applicable forms and layouts. The included review ledger records applicability and evidence, but its checks do not by themselves certify a document as compliant or confirm that an edition is current.
 

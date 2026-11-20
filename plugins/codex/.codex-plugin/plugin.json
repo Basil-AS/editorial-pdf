@@ -1,0 +1,17 @@
+{
+  "name": "codex",
+  "version": "2.0.1",
+  "description": "Create and inspect polished PDFs from Markdown, including Russian GOST 7.32 reports.",
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "Editorial PDF",
+    "shortDescription": "PDF из Markdown и по ГОСТ",
+    "longDescription": "Создаёт и проверяет PDF из Markdown. Включает отдельные инструкции Editorial PDF и ГОСТ 7.32, сборщики, исходники стандартов и проверки статуса редакций.",
+    "developerName": "Basil-AS",
+    "category": "Productivity",
+    "capabilities": [],
+    "defaultPrompt": "Use Editorial PDF to create or review a polished PDF.",
+    "logo": "./assets/icon.svg",
+    "composerIcon": "./assets/icon.svg"
+  }
+}

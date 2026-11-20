@@ -1,0 +1,76 @@
+* { box-sizing: border-box; }
+body {
+    margin: 0;
+    color: #192634;
+    font: 11pt/1.5 "Noto Sans", "DejaVu Sans", "Segoe UI", Arial, sans-serif;
+    overflow-wrap: anywhere;
+    print-color-adjust: exact;
+}
+h1, h2, h3, h4, h5, h6 {
+    line-height: 1.22;
+    color: #122a41;
+    margin: 1.25em 0 .4em;
+    break-after: avoid-page;
+}
+.document-title {
+    margin: 0 0 .75em;
+    padding: 0 0 .45em;
+    border-bottom: 2pt solid #247578;
+    font: bold 27pt/1.12 "Noto Serif", "DejaVu Serif", Georgia, serif;
+}
+h1 { font-size: 21pt; }
+h2 { font-size: 17pt; }
+h3 { font-size: 13pt; }
+h4, h5, h6 { font-size: 11pt; }
+p, ul, ol { margin: 0 0 .7em; orphans: 2; widows: 2; }
+ul, ol { padding-left: 1.45em; }
+li > ul, li > ol { margin-bottom: 0; }
+a { color: #145f80; text-decoration: underline; }
+table {
+    width: 100%;
+    border-collapse: collapse;
+    table-layout: fixed;
+    margin: .8em 0 1em;
+    font-size: 9.5pt;
+}
+thead { display: table-header-group; }
+tr { break-inside: avoid-page; }
+th, td { border: 1px solid #ccd6df; padding: .45em .65em; vertical-align: top; }
+th { background: #e8f0f4; text-align: left; }
+tbody tr:nth-child(even) { background: #f6f8fa; }
+code { font: .9em "DejaVu Sans Mono", Consolas, monospace; background: #eef2f6; }
+pre {
+    margin: .8em 0 1em;
+    padding: .75em 1em;
+    background: #eef2f6;
+    border-radius: .25em;
+    white-space: pre-wrap;
+    tab-size: 4;
+    orphans: 2;
+    widows: 2;
+}
+pre code { background: transparent; }
+blockquote, .callout {
+    margin: .85em 0;
+    padding: .6em 1em;
+    border-left: 3pt solid var(--accent, #687b8d);
+    background: var(--wash, #f2f5f7);
+    box-decoration-break: clone;
+}
+.callout-label {
+    font-size: 9pt;
+    color: var(--accent);
+    font-weight: bold;
+    text-transform: uppercase;
+    letter-spacing: .04em;
+    margin-bottom: .25em;
+    break-after: avoid-page;
+}
+.callout-note { --accent: #185b8a; --wash: #edf5fb; }
+.callout-tip { --accent: #17664a; --wash: #eef8f1; }
+.callout-important { --accent: #64429a; --wash: #f5f0fa; }
+.callout-warning { --accent: #825513; --wash: #fff8e8; }
+.callout-caution { --accent: #a12b36; --wash: #fff0f1; }
+blockquote > :last-child, .callout > :last-child { margin-bottom: 0; }
+img { max-width: 100%; max-height: 175mm; width: auto; height: auto; object-fit: contain; break-inside: avoid-page; }
+hr { border: 0; border-top: 1px solid #ccd6df; margin: 1.2em 0; }

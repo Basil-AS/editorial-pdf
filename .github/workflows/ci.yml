@@ -28,6 +28,8 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y pandoc poppler-utils texlive-xetex texlive-latex-extra texlive-lang-cyrillic fonts-liberation2
       - run: python -m compileall -q scripts tests variants/gost-rf-pdf/scripts
+      - run: python scripts/sync_codex_marketplace.py --check
+      - run: python tests/check_marketplace.py
       - run: python variants/gost-rf-pdf/scripts/norms.py verify-sources
       - run: python tests/check_norms.py
       - run: |
@@ -90,6 +92,14 @@ jobs:
             (cd dist && sha256sum "editorial-pdf-$gost_tag.tar.gz" > "editorial-pdf-$gost_tag.sha256")
             gh release create "$gost_tag" --target "$GITHUB_SHA" --title "Editorial PDF $gost_tag" --notes 'Optional GOST companion profile, packaged separately from the default Editorial PDF 2.0.1 skill. Includes the supplied 21-standard source set, review workflow and ГОСТ 7.32 builder. Source editions are preserved as supplied; see the package scope and currency limitations.' --latest=false "dist/editorial-pdf-$gost_tag.tar.gz" "dist/editorial-pdf-$gost_tag.sha256"
           fi
+          codex_tag='v2.0.1-codex.1'
+          if ! gh release view "$codex_tag" >/dev/null 2>&1; then
+            mkdir -p dist/codex-package
+            git archive --format=tar --prefix=editorial-pdf-marketplace/ "$GITHUB_SHA" .agents/plugins plugins/codex | tar -xf - -C dist/codex-package
+            tar -czf "dist/editorial-pdf-$codex_tag.tar.gz" -C dist/codex-package editorial-pdf-marketplace
+            (cd dist && sha256sum "editorial-pdf-$codex_tag.tar.gz" > "editorial-pdf-$codex_tag.sha256")
+            gh release create "$codex_tag" --target "$GITHUB_SHA" --title "Editorial PDF Codex Marketplace $codex_tag" --notes 'Codex marketplace source with a repository marketplace manifest and the Editorial PDF and GOST 7.32 skills. To add from Git, use ref master and sparse paths .agents/plugins and plugins/codex.' --latest=false "dist/editorial-pdf-$codex_tag.tar.gz" "dist/editorial-pdf-$codex_tag.sha256"
+          fi
       - name: Remove merged working branches
         env:
           GH_TOKEN: ${{ github.token }}
@@ -98,7 +108,7 @@ jobs:
         run: |
           set -euo pipefail
           git fetch origin '+refs/heads/*:refs/remotes/origin/*'
-          for branch in develop feature/editorial-pdf-1.0 feature/editorial-pdf-2.0 feature/gost-2.0.1 release/1.0.0 release/2.0.0 chore/finalize-repository; do
+          for branch in develop feature/editorial-pdf-1.0 feature/editorial-pdf-2.0 feature/gost-2.0.1 feature/codex-marketplace release/1.0.0 release/2.0.0 chore/finalize-repository; do
             if git show-ref --verify --quiet "refs/remotes/origin/$branch"; then
               git merge-base --is-ancestor "origin/$branch" HEAD
               gh api -X DELETE "repos/$GH_REPO/git/refs/heads/$branch"
