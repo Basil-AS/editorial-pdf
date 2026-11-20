@@ -56,7 +56,11 @@ jobs:
             target="${entry#*:}"
             tag="v$version"
             if gh release view "$tag" >/dev/null 2>&1; then continue; fi
-            git archive --format=zip --prefix=editorial-pdf/ "$target" SKILL.md scripts assets references agents > "dist/editorial-pdf-$tag.zip"
+            paths=(SKILL.md scripts assets)
+            for optional in references agents; do
+              if git cat-file -e "$target:$optional" 2>/dev/null; then paths+=("$optional"); fi
+            done
+            git archive --format=zip --prefix=editorial-pdf/ "$target" "${paths[@]}" > "dist/editorial-pdf-$tag.zip"
             (cd dist && sha256sum "editorial-pdf-$tag.zip" > "editorial-pdf-$tag.sha256")
             case "$version" in
               1.0.0) notes='Cleaned legacy baseline. Personal examples and external font downloads removed. See merged PRs #1 and #2.' ;;
