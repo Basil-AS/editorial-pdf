@@ -30,7 +30,7 @@ def check():
     assert entry["category"] == "Productivity"
     assert plugin["$schema"] == (
         "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json")
-    assert plugin["version"] == compatibility["version"] == "2.0.1"
+    assert plugin["version"] == compatibility["version"] == "2.0.2"
     interface = plugin["extensions"]["com.openai"]["interface"]
     for field in ("displayName", "shortDescription", "longDescription",
                   "developerName", "category"):

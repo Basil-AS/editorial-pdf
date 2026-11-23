@@ -97,12 +97,12 @@ local function heading(el)
   local command = ({'section','subsection','subsubsection'})[level]
   local start = level == 1 and '\\clearpage' or '\\Needspace{4\\baselineskip}'
   local entry = ''
-  if not has(el,'notoc') and level <= 2 then
+  if not has(el,'notoc') and level <= 3 then
     entry = '\\addcontentsline{toc}{'..command..'}{'..plain(label)..'}'
   end
   if level == 1 and prefix == tostring(section) then
     command = 'gostnirsection'
-    visible = plain(label)
+    visible = plain(pandoc.text.upper(label))
   end
   return raw(start..'\\phantomsection'..anchor(id)..entry..'\\'..command..'*{'..visible..'}')
 end
@@ -147,25 +147,53 @@ local function table_block(tbl, div)
   local n = number('table')
   local count = #tbl.colspecs
   local widths, weight_sum = {}, 0
-  for _, spec in ipairs(tbl.colspecs) do
-    local weight = spec[2] or 1
-    widths[#widths+1] = weight
+  for i = 1, count do widths[i] = 0 end
+  local function measure(values)
+    for _, row in ipairs(values) do
+      if #row.cells ~= count then fail('Объединённые ячейки требуют отдельной вёрстки: '..id) end
+      for i, cell in ipairs(row.cells) do
+        if cell.row_span ~= 1 or cell.col_span ~= 1 then fail('Объединённые ячейки требуют отдельной вёрстки: '..id) end
+        -- Match ASCII whitespace explicitly: Lua's locale-aware %s can treat
+        -- UTF-8 continuation bytes as spaces and corrupt Cyrillic measurements.
+        local text = pandoc.utils.stringify(pandoc.Pandoc(cell.contents)):gsub('[ \t\r\n]+', ' ')
+        local chars = utf8.len(text) or #text
+        widths[i] = math.max(widths[i], chars)
+      end
+    end
+  end
+  measure(tbl.head.rows)
+  for _, group in ipairs(tbl.bodies) do
+    measure(group.head)
+    measure(group.body)
+  end
+  measure(tbl.foot.rows)
+  local table_units = {}
+  for i, chars in ipairs(widths) do
+    -- Keep short cells tight; cap each column's natural width so prose wraps
+    -- before one long cell forces a table back to full-page width.
+    local weight = math.min(math.max(chars * 0.52 + 0.7, 2.0), 23.0)
+    table_units[i] = weight
     weight_sum = weight_sum + weight
   end
+  local caption_label = 'Таблица '..n..' – '..cap
+  local natural_units = weight_sum
+  local ratios = {}
+  for i, weight in ipairs(table_units) do
+    ratios[i] = weight / natural_units
+  end
   local colspec = '|'
-  for i,w in ipairs(widths) do
+  for i,ratio in ipairs(ratios) do
     local align = ({AlignCenter='\\centering',AlignRight='\\raggedleft'})[tbl.colspecs[i][1]]
       or '\\raggedright'
-    colspec = colspec..string.format('>{%s\\arraybackslash}p{\\dimexpr %.8f\\GostColRoom\\relax}|',align,w/weight_sum)
+    colspec = colspec..string.format('>{%s\\arraybackslash}p{\\dimexpr %.8f\\GostTableWidth\\relax}|',align,ratio)
   end
   local function rows(values, header)
     local result = {}
     for _, row in ipairs(values) do
       local cells = {}
-      if #row.cells ~= count then fail('Объединённые ячейки требуют отдельной вёрстки: '..id) end
       for _, cell in ipairs(row.cells) do
-        if cell.row_span ~= 1 or cell.col_span ~= 1 then fail('Объединённые ячейки требуют отдельной вёрстки: '..id) end
-        cells[#cells+1] = (header and '\\centering ' or '')..write(cell.contents)
+        local value = write(cell.contents)
+        cells[#cells+1] = header and '{\\bfseries '..value..'}' or value
       end
       result[#result+1] = table.concat(cells,' & ')..' \\tabularnewline \\hline\n'
     end
@@ -177,14 +205,16 @@ local function table_block(tbl, div)
   body = body..rows(tbl.foot.rows)
   if body == '' then fail('Нет данных в таблице: '..id) end
   local function caprow(text, align)
-    return '\\multicolumn{'..count..'}{@{}l@{}}{\\GostTableCaption{'..align..' '..text..'}} \\\\ \\hline\n'
+    return '\\multicolumn{'..count..'}{@{}p{\\GostTableWidth}@{}}{\\GostTableCaption{'..align..' '..text..'}} \\\\ \\hline\n'
   end
-  return raw('\\begingroup\\GostTableFont\\setlength{\\tabcolsep}{4pt}'
+  return raw('\\begingroup\\GostTableFont\\setlength{\\tabcolsep}{3pt}\\setlength{\\arrayrulewidth}{0.3pt}'
     ..'\\GostColRoom=\\dimexpr\\linewidth-'..(count*2)
     ..'\\tabcolsep-'..(count+1)..'\\arrayrulewidth\\relax\n'
+    ..string.format('\\GostTableWidth=\\dimexpr %.4f\\fontdimen6\\font\\relax\n',natural_units)
+    ..'\\ifdim\\GostTableWidth>\\GostColRoom \\GostTableWidth=\\GostColRoom \\fi\n'
+    ..'\\noindent\\GostTableTitle{'..anchor(id)..plain(caption_label)..'}\n'
     ..'\\begin{longtable}{'..colspec..'}\n'
-    ..caprow(anchor(id)..plain('Таблица '..n..' – '..cap),'\\raggedright')
-    ..head..'\\endfirsthead\n'
+    ..'\\hline\n'..head..'\\endfirsthead\n'
     ..caprow(plain('Продолжение таблицы '..n),'\\raggedright')
     ..head..'\\endhead\n'..body..'\\end{longtable}\\endgroup')
 end
@@ -206,7 +236,7 @@ local function blocks(input)
         landscape = false
         out = nil
       elseif has(b,'toc') then
-        if landscape or #b.content > 0 or toc > 0 then fail('Содержание должно быть одним пустым книжным блоком') end
+        if landscape or #b.content > 0 or toc > 0 then fail('Маркер навигации должен быть одним пустым книжным блоком') end
         toc = toc + 1
         out = raw('\\GostTOC')
       elseif has(b,'front') then
@@ -281,7 +311,6 @@ function Pandoc(doc)
   })
   doc.blocks = blocks(doc.blocks)
   if front > 0 then fail('Вставьте пустой блок .front в начале документа') end
-  if not draft and toc ~= 1 then fail('В полном документе требуется блок .toc') end
   if not draft and (front >= 0 or not headings['реферат'] or not headings['введение']
       or not headings['заключение'] or section == 0) then
     fail('Для полного отчёта нужны титул, реферат, введение, основная часть и заключение. Для фрагмента используйте --draft')

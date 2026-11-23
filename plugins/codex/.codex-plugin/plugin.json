@@ -1,6 +1,6 @@
 {
   "name": "codex",
-  "version": "2.0.1",
+  "version": "2.0.2",
   "description": "Create and inspect polished PDFs from Markdown, including Russian GOST 7.32 reports.",
   "skills": "./skills/",
   "interface": {

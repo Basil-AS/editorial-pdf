@@ -1,6 +1,6 @@
-# Editorial PDF — GOST add-on 2.0.1-gost.1
+# Editorial PDF — GOST add-on 2.0.2-gost.1
 
-This is an optional companion to Editorial PDF 2.0.1. It preserves the base skill and adds the supplied GOST workflow as a separate profile with its original source package: the skill instructions, applicability map, review guides, searchable text, 21 source PDFs, integrity catalog and scripts.
+This is an optional companion to Editorial PDF 2.0.1. It preserves the base skill and adds the supplied GOST workflow as a separate profile with its original source package: the skill instructions, applicability map, review guides, searchable text, 21 source PDFs, integrity catalog and scripts. Its PDF builder uses 16 pt body text, same-size headings, 14 pt table text, compact content-width tables, tighter heading spacing and PDF outline navigation without a printed contents page. ГОСТ 7.32 requires body text no smaller than 12 pt. It permits omitting the contents for reports up to and including 10 pages. For longer reports, the owner's preference is a documented deviation; do not claim full structural conformity when the printed contents is omitted.
 
 ## Use
 
