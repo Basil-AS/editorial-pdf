@@ -68,10 +68,12 @@ See [builder options](references/builder.md) and [existing PDF guidance](referen
 | 2.0.1 | CI, release packaging and repository documentation | Repository maintenance |
 | 2.0.1-gost.1 | Companion profile with the supplied 21-standard GOST set, source PDFs, review guidance and a ГОСТ 7.32 builder | [GOST add-on](variants/gost-rf-pdf/README.md) |
 | 2.0.1-codex.1 | Codex marketplace catalog with Editorial PDF and GOST skills | [Codex plugin source](plugins/codex) |
+| 2.0.2-gost.1 | 16 pt body text, same-size headings, compact tables and PDF bookmarks without a printed contents page | [GOST add-on](variants/gost-rf-pdf/README.md) |
+| 2.0.2-codex.1 | Codex marketplace package with the compact GOST profile | [Codex plugin source](plugins/codex) |
 
 Versioned release archives include SHA-256 checksum files. The GOST companion and Codex marketplace package are distributed as separate tar.gz archives. Version 2.0 changes CLI options. Consult `python scripts/build_pdf.py --help` when migrating from 1.0.
 
-The GOST add-on is a separately versioned profile. It includes the editions supplied in its source package and keeps their text, PDF originals, applicability map, review guides and source-integrity checks together. It does not change the default 2.0.1 profile. Its Markdown builder implements the ГОСТ 7.32 profile; other document families require their own applicable forms and layouts. The included review ledger records applicability and evidence, but its checks do not by themselves certify a document as compliant or confirm that an edition is current.
+The GOST add-on is a separately versioned profile. It includes the editions supplied in its source package and keeps their text, PDF originals, applicability map, review guides and source-integrity checks together. It does not change the default 2.0.1 profile. Its Markdown builder implements the ГОСТ 7.32 layout profile; other document families require their own applicable forms and layouts. ГОСТ 7.32 permits omitting printed contents for reports up to and including 10 pages. For longer reports, the owner's preference to use PDF outline navigation only is a documented deviation; bookmarks do not replace the printed contents. The included review ledger records applicability and evidence, but its checks do not by themselves certify a document as compliant or confirm that an edition is current.
 
 ## Development and delivery
 
